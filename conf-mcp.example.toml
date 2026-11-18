@@ -1,0 +1,4 @@
+# Скопируйте в ~/.config/conf-mcp.toml и укажите настройки своего Confluence.
+# base_url — адрес приложения, включая /confluence, если он используется.
+base_url = "https://confluence.example.com/confluence"
+token = "your-personal-access-token"
