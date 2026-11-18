@@ -2,3 +2,6 @@
 # base_url — адрес приложения, включая /confluence, если он используется.
 base_url = "https://confluence.example.com/confluence"
 token = "your-personal-access-token"
+# Необязательный каталог изображений и часового кэша; абсолютный путь или ~/….
+# По умолчанию: $XDG_CACHE_HOME/conf-mcp/images или ~/.cache/conf-mcp/images.
+download_dir = "~/.cache/conf-mcp/images"

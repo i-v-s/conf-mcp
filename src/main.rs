@@ -4,6 +4,8 @@ use rmcp::{ServiceExt, transport::stdio};
 mod config;
 mod confluence;
 mod cql;
+mod hash;
+mod image_cache;
 mod markdown;
 mod server;
 
@@ -17,8 +19,9 @@ async fn main() {
 
 async fn run() -> Result<()> {
     let config = config::Config::load()?;
+    let images = image_cache::ImageCache::new(config.download_dir.clone());
     let client = confluence::ConfluenceClient::new(config)?;
-    let service = server::ConfluenceServer::new(client)
+    let service = server::ConfluenceServer::new(client, images)
         .serve(stdio())
         .await
         .context("Не удалось инициализировать MCP через stdio")?;

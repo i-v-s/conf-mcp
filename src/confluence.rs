@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::time::Duration;
 use url::Url;
 
-use crate::{config::Config, markdown};
+use crate::{config::Config, hash::sha256_hex, markdown};
 
-const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+pub(crate) const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
 const IMAGE_ACCEPT: &str = "image/png, image/jpeg, image/gif, image/webp";
 
 pub struct Image {
@@ -180,6 +180,15 @@ impl ConfluenceClient {
         })
         .await
         .context("Истёк таймаут загрузки изображения Confluence")?
+    }
+
+    pub fn image_cache_key(&self, input: &str) -> Result<String> {
+        let url = image_url(input, &self.base_url)?;
+        Ok(sha256_hex(&[
+            self.headers[AUTHORIZATION].as_bytes(),
+            &[0],
+            url.as_str().as_bytes(),
+        ]))
     }
 
     pub async fn get_page(&self, page: &str) -> Result<Page> {
@@ -379,7 +388,7 @@ async fn read_image(mut response: reqwest::Response) -> Result<Image> {
     Ok(Image { data, mime_type })
 }
 
-fn image_mime(data: &[u8]) -> Option<&'static str> {
+pub(crate) fn image_mime(data: &[u8]) -> Option<&'static str> {
     if data.starts_with(b"\x89PNG\r\n\x1a\n") {
         Some("image/png")
     } else if data.starts_with(b"\xff\xd8\xff") {
@@ -629,6 +638,42 @@ mod tests {
 
     fn png() -> Vec<u8> {
         STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=").unwrap()
+    }
+
+    #[test]
+    fn image_cache_keys_include_version_and_authorization_and_validate_url() {
+        let client = ConfluenceClient::new(
+            Config::new("https://wiki.test/confluence", "first-secret").unwrap(),
+        )
+        .unwrap();
+        let other = ConfluenceClient::new(
+            Config::new("https://wiki.test/confluence", "second-secret").unwrap(),
+        )
+        .unwrap();
+        let url = "https://wiki.test/confluence/download/attachments/42/image.png?version=1&api=v2";
+        let key = client.image_cache_key(url).unwrap();
+        assert_eq!(key.len(), 64);
+        assert_eq!(
+            key,
+            client.image_cache_key(&format!(" {url}#preview ")).unwrap()
+        );
+        assert_ne!(
+            key,
+            client
+                .image_cache_key(&url.replace("version=1", "version=2"))
+                .unwrap()
+        );
+        assert_ne!(key, other.image_cache_key(url).unwrap());
+        assert!(
+            client
+                .image_cache_key("https://other.test/image.png")
+                .is_err()
+        );
+        assert!(
+            client
+                .image_cache_key("https://wiki.test/outside/image.png")
+                .is_err()
+        );
     }
 
     #[tokio::test]

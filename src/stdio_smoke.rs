@@ -141,6 +141,14 @@ async fn stdio_initialization_tools_errors_and_eof() {
             "string"
         );
         assert_eq!(image_tool["inputSchema"]["additionalProperties"], false);
+        assert_eq!(
+            image_tool["inputSchema"]["properties"]["refresh"]["type"],
+            "boolean"
+        );
+        assert_eq!(
+            image_tool["inputSchema"]["properties"]["refresh"]["default"],
+            false
+        );
         for (name, arguments) in [
             (
                 "get_page",
@@ -164,6 +172,7 @@ async fn stdio_initialization_tools_errors_and_eof() {
             ),
             ("get_image", json!({})),
             ("get_image", json!({"url": 42})),
+            ("get_image", json!({"url": "image.png", "refresh": "yes"})),
             ("get_image", json!({"url": "image.png", "unexpected": true})),
         ] {
             let response = session
@@ -182,6 +191,7 @@ async fn stdio_initialization_tools_errors_and_eof() {
             "Сервер должен работать после ошибок"
         );
         session.finish().await;
+        assert!(!home.path().join(".cache/conf-mcp/images").exists());
     }
 }
 

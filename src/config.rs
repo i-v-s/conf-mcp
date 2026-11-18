@@ -4,12 +4,13 @@ use serde::Deserialize;
 use std::env;
 use std::fs;
 use std::io::ErrorKind;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use url::Url;
 
 pub struct Config {
     pub base_url: Url,
     pub authorization: HeaderValue,
+    pub download_dir: Option<PathBuf>,
 }
 
 #[derive(Default, Deserialize)]
@@ -17,6 +18,7 @@ pub struct Config {
 struct FileConfig {
     base_url: Option<String>,
     token: Option<String>,
+    download_dir: Option<String>,
 }
 
 impl Config {
@@ -51,7 +53,15 @@ impl Config {
         let token = env_token
             .or(file.token)
             .context("Укажите token в ~/.config/conf-mcp.toml или CONFLUENCE_TOKEN")?;
-        Self::new(&url, &token)
+        let mut config = Self::new(&url, &token)?;
+        let home = env::var_os("HOME").map(PathBuf::from);
+        let xdg_cache = env::var_os("XDG_CACHE_HOME").map(PathBuf::from);
+        config.download_dir = download_directory(
+            file.download_dir.as_deref(),
+            home.as_deref(),
+            xdg_cache.as_deref(),
+        )?;
+        Ok(config)
     }
 
     pub fn new(base_url: &str, token: &str) -> Result<Self> {
@@ -79,8 +89,34 @@ impl Config {
         Ok(Self {
             base_url,
             authorization,
+            download_dir: None,
         })
     }
+}
+
+fn download_directory(
+    configured: Option<&str>,
+    home: Option<&Path>,
+    xdg_cache: Option<&Path>,
+) -> Result<Option<PathBuf>> {
+    if let Some(value) = configured {
+        let path = if let Some(rest) = value.strip_prefix("~/") {
+            home.context("Для download_dir с ~/ требуется HOME")?
+                .join(rest.trim_start_matches('/'))
+        } else {
+            PathBuf::from(value)
+        };
+        if !path.is_absolute() {
+            bail!("download_dir должен быть непустым абсолютным путём или начинаться с ~/");
+        }
+        return Ok(Some(path));
+    }
+    if let Some(root) = xdg_cache.filter(|path| path.is_absolute()) {
+        return Ok(Some(root.join("conf-mcp/images")));
+    }
+    Ok(home
+        .filter(|path| path.is_absolute())
+        .map(|root| root.join(".cache/conf-mcp/images")))
 }
 
 fn read_env(name: &str) -> Result<Option<String>> {
@@ -94,6 +130,57 @@ fn read_env(name: &str) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_directory_accepts_absolute_and_home_paths_and_keeps_defaults() {
+        let home = Path::new("/home/test");
+        assert_eq!(
+            download_directory(Some("/tmp/conf images"), Some(home), None).unwrap(),
+            Some(PathBuf::from("/tmp/conf images"))
+        );
+        assert_eq!(
+            download_directory(Some("~/Downloads/confluence"), Some(home), None).unwrap(),
+            Some(home.join("Downloads/confluence"))
+        );
+        assert_eq!(
+            download_directory(None, Some(home), Some(Path::new("/var/cache/test"))).unwrap(),
+            Some(PathBuf::from("/var/cache/test/conf-mcp/images"))
+        );
+        assert_eq!(
+            download_directory(None, Some(home), Some(Path::new("relative"))).unwrap(),
+            Some(home.join(".cache/conf-mcp/images"))
+        );
+        assert_eq!(download_directory(None, None, None).unwrap(), None);
+        for value in ["", "relative/images", "~someone/images", "~"] {
+            assert!(download_directory(Some(value), Some(home), None).is_err());
+        }
+        assert!(download_directory(Some("~/images"), None, None).is_err());
+        let temporary = tempfile::tempdir().unwrap();
+        let path = temporary.path().join("config.toml");
+        let directory = temporary.path().join("not-created/images");
+        fs::write(
+            &path,
+            format!(
+                "base_url = 'https://wiki.test'\ntoken = 'secret'\ndownload_dir = '{}'\n",
+                directory.display()
+            ),
+        )
+        .unwrap();
+        let config = Config::from_sources(Some(&path), None, None).unwrap();
+        assert_eq!(config.download_dir, Some(directory.clone()));
+        assert!(!directory.exists());
+        fs::write(
+            &path,
+            "base_url = 'https://wiki.test'\ntoken = 'secret'\ndownload_dir = ''\n",
+        )
+        .unwrap();
+        let error = Config::from_sources(Some(&path), None, None)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("download_dir"));
+        assert!(!error.contains("secret"));
+    }
 
     #[test]
     fn file_and_environment_precedence() {
